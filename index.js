@@ -1,72 +1,123 @@
-const express = require('express')
-const app = express()
-const db = require('@cyclic.sh/dynamodb')
+const express = require('express');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const { URL } = require('url');
+const readline = require('readline');
 
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+const app = express();
+const port = 3000;
 
-// #############################################################################
-// This configures static hosting for files in /public that have the extensions
-// listed in the array.
-// var options = {
-//   dotfiles: 'ignore',
-//   etag: false,
-//   extensions: ['htm', 'html','css','js','ico','jpg','jpeg','png','svg'],
-//   index: ['index.html'],
-//   maxAge: '1m',
-//   redirect: false
-// }
-// app.use(express.static('public', options))
-// #############################################################################
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-// Create or Update an item
-app.post('/:col/:key', async (req, res) => {
-  console.log(req.body)
+async function getTagsFromUrl(url, tagSelector) {
+  try {
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    };
 
-  const col = req.params.col
-  const key = req.params.key
-  console.log(`from collection: ${col} delete key: ${key} with params ${JSON.stringify(req.params)}`)
-  const item = await db.collection(col).set(key, req.body)
-  console.log(JSON.stringify(item, null, 2))
-  res.json(item).end()
-})
+    const response = await axios.get(url, { headers });
+    const $ = cheerio.load(response.data);
+    const tags = $(tagSelector).map((_, element) => $(element).text().trim()).get();
 
-// Delete an item
-app.delete('/:col/:key', async (req, res) => {
-  const col = req.params.col
-  const key = req.params.key
-  console.log(`from collection: ${col} delete key: ${key} with params ${JSON.stringify(req.params)}`)
-  const item = await db.collection(col).delete(key)
-  console.log(JSON.stringify(item, null, 2))
-  res.json(item).end()
-})
+    return tags;
+  } catch (error) {
+    if (error.response) {
+      const { status } = error.response;
+      if (status === 403) {
+        console.error(`Error 403: Access forbidden for URL: ${url}`);
+      } else if (status === 404) {
+        console.error(`Error 404: URL not found: ${url}`);
+      } else {
+        console.error(`HTTP Error: ${status} - ${error.message}`);
+      }
+    } else {
+      console.error(`Error: ${error.message}`);
+    }
+    return null;
+  }
+}
 
-// Get a single item
-app.get('/:col/:key', async (req, res) => {
-  const col = req.params.col
-  const key = req.params.key
-  console.log(`from collection: ${col} get key: ${key} with params ${JSON.stringify(req.params)}`)
-  const item = await db.collection(col).get(key)
-  console.log(JSON.stringify(item, null, 2))
-  res.json(item).end()
-})
+async function getCrawledData(mainInput, tagSelector, res) {
+  try {
+    const parsedUrl = new URL(mainInput);
+    const mainUrl = parsedUrl.href;
 
-// Get a full listing
-app.get('/:col', async (req, res) => {
-  const col = req.params.col
-  console.log(`list collection: ${col} with params: ${JSON.stringify(req.params)}`)
-  const items = await db.collection(col).list()
-  console.log(JSON.stringify(items, null, 2))
-  res.json(items).end()
-})
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    };
 
-// Catch all handler for all other request.
-app.use('*', (req, res) => {
-  res.json({ msg: 'no route handler found' }).end()
-})
+    const response = await axios.get(mainUrl, { headers });
+    const $ = cheerio.load(response.data);
+    const mainTags = await getTagsFromUrl(mainUrl, tagSelector);
 
-// Start the server
-const port = process.env.PORT || 3000
+    const uniqueTags = new Set(mainTags);
+
+    if (mainTags) {
+      res.write(`Best 3 Tags from Each Images (1st Page) - ${mainUrl}:\n`);
+      res.write(`${mainTags.join(', ')}\n`);
+      res.write('-'.repeat(50) + '\n');
+    }
+
+    const links = [];
+    $('body.new-resource-list .filter-tags-row .tag-slider--list li a, body.new-resource-list .no-results--popular .tag-slider--list li a').each((_, element) => {
+      links.push(new URL($(element).attr('href'), mainUrl).href);
+    });
+
+    for (const link of links) {
+      const tags = await getTagsFromUrl(link, tagSelector);
+      if (tags) {
+        tags.forEach(tag => uniqueTags.add(tag));
+        await sleep(1000); // Add a 1-second delay between requests to avoid being blocked
+      }
+    }
+
+    res.write('Tags from All Slider Tags:\n');
+    res.write(`${[...uniqueTags].join(', ')}\n`);
+    res.write('-'.repeat(50) + '\n');
+
+    displayAllTags([...uniqueTags], res);
+
+  } catch (error) {
+    if (error.response) {
+      const { status } = error.response;
+      if (status === 403) {
+        res.write(`Error 403: Access forbidden for URL: ${mainUrl}\n`);
+      } else if (status === 404) {
+        res.write(`Error 404: URL not found: ${mainUrl}\n`);
+      } else {
+        res.write(`HTTP Error: ${status} - ${error.message}\n`);
+      }
+    } else {
+      res.write(`Error: ${error.message}\n`);
+    }
+    res.end();
+  }
+}
+
+function displayAllTags(uniqueTags, res) {
+  const allUniqueTags = [...new Set(uniqueTags)];
+  res.write('All Unique Tags (after removing duplicates):\n');
+  res.write(`${allUniqueTags.join(', ')}\n`);
+  res.write('-'.repeat(50) + '\n');
+  res.end();
+}
+
+app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/plain');
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: res
+  });
+
+  // Prompt the user for a main link or keyword to crawl
+  rl.question('Enter the main link or keyword to crawl: ', (mainInput) => {
+    getCrawledData(mainInput, '.showcase .showcase__item.showcase__item--buttons .showcase__thumbnail .tags-container ul.tags>li>.tag-item', res);
+    rl.close();
+  });
+});
+
 app.listen(port, () => {
-  console.log(`index.js listening on ${port}`)
-})
+  console.log(`Server listening at http://localhost:${port}`);
+});
