@@ -1,18 +1,21 @@
 {
-  "name": "express-web-crawler",
+  "name": "web-scraper",
   "version": "1.0.0",
-  "description": "Express Web Crawler App",
+  "description": "A web scraper using Express, Axios, and Cheerio",
   "main": "index.js",
   "scripts": {
+    "install": "npm install",
     "start": "node index.js"
   },
+  "keywords": [
+    "web scraper",
+    "express",
+    "axios",
+    "cheerio"
+  ],
   "dependencies": {
     "express": "^4.17.1",
-    "axios": "^0.21.1",
-    "cheerio": "^1.0.0-rc.3"
-  },
-  "engines": {
-    "node": ">=12.0.0"
-  },
-  "license": "MIT"
+    "axios": "^0.24.0",
+    "cheerio": "^1.0.0-rc.10"
+  }
 }
